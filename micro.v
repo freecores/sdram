@@ -3,7 +3,7 @@
 
 
 //*******************************************************************************
-//  S Y N T H E Z I A B L E      S D R A M     C O N T R O L L E R    C O R E
+//  S Y N T H E S I Z A B L E      S D R A M     C O N T R O L L E R    C O R E
 //
 //  This core adheres to the GNU Public License  
 // 

@@ -1,7 +1,7 @@
 `include "inc.h"
 
 //*******************************************************************************
-//  S Y N T H E Z I A B L E      S D R A M     C O N T R O L L E R    C O R E
+//  S Y N T H E S I Z A B L E      S D R A M     C O N T R O L L E R    C O R E
 //
 //  This core adheres to the GNU Public License  
 // 
@@ -129,7 +129,8 @@ module hostcont (
 //                    rd_wr_clk
                     reg_mp_data_mux,
                     reg_mp_addx,
-                    reg_sd_data
+                    reg_sd_data,
+                    reg_modeset
 
              );
 
@@ -186,6 +187,7 @@ input           do_modeset_ack;
 output  [31:0]  reg_mp_data_mux;
 output  [22:0]  reg_mp_addx;
 output  [31:0]  reg_sd_data;
+output  [10:0]  reg_modeset;
 
 // ****************************************
 //
@@ -198,7 +200,6 @@ reg     [31:0]  reg_mp_data;
 reg     [31:0]  reg_sd_data;
 reg     [3:0]   decoded_dqm;
 reg     [10:0]  reg_modeset; 
-reg     [10:0]  reg_modeset_i; 
 reg     [10:0]  sd_addx;
 reg             do_read;
 reg             do_write;
@@ -361,11 +362,11 @@ assign sd_data_buff = sd_data_in;
 
 
 // SDRAM SIDE ADDX
-always @(sd_addx10_mux or reg_mp_data or reg_mp_addx)
+always @(sd_addx10_mux or reg_mp_data or reg_mp_addx or reg_modeset)
   case (sd_addx10_mux)
     2'b00:   sd_addx[10] <= reg_mp_addx[20];
     2'b01:   sd_addx[10] <= 1'b0;
-    2'b10:   sd_addx[10] <= reg_mp_data[10];
+    2'b10:   sd_addx[10] <= reg_modeset[10];
     default: sd_addx[10] <= 1'b1;
   endcase
 

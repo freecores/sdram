@@ -1,5 +1,5 @@
 //*******************************************************************************
-//  S Y N T H E Z I A B L E      S D R A M     C O N T R O L L E R    C O R E
+//  S Y N T H E S I Z A B L E      S D R A M     C O N T R O L L E R    C O R E
 //
 //  This core adheres to the GNU Public License  
 // 
@@ -209,9 +209,9 @@
 `define state_precharge        `TS'b1110
 `define state_powerup          `TS'b1010
 `define state_modeset          `TS'b1011
-`define state_cool_off         `TS'b1001
-`define state_delay_Trp            `TS'b0000
-`define state_delay_Trsc           `TS'b1000
+`define state_delay_Trp        `TS'b0000
+`define state_delay_Tras1      `TS'b1000
+`define state_delay_Tras2      `TS'b1001
 
 // Fresh timer states
 `define   state_count                3'b001

@@ -2,7 +2,7 @@
 
 
 //*******************************************************************************
-//  S Y N T H E Z I A B L E      S D R A M     C O N T R O L L E R    C O R E
+//  S Y N T H E S I Z A B L E      S D R A M     C O N T R O L L E R    C O R E
 //
 //  This core adheres to the GNU Public License  
 // 
@@ -126,7 +126,7 @@ module sdramcnt(
 
 		);
 
-
+parameter N1 = 4;
 
 // ****************************************
 //
@@ -144,7 +144,7 @@ output	        sd_wr_l;
 output	        sd_cs_l;
 output	        sd_ras_l;
 output	        sd_cas_l;
-output	 [3:0]  sd_dqm;
+output	 [(N1-1):0]  sd_dqm;
 
 // Host Controller connections
 input           do_mode_set;
@@ -206,7 +206,10 @@ reg             do_read_ack;
 reg             do_modeset_ack;
 reg             do_refresh_ack;
 
+wire            Trc_expired, Ref_expired;
 
+assign Trc_expired = (autorefresh_cntr == 4'h6); 
+assign Ref_expired = (refresh_cntr == cntr_limit);
 
 // State Machine
 always @(posedge sys_clk or negedge sys_rst_l)
@@ -214,7 +217,7 @@ always @(posedge sys_clk or negedge sys_rst_l)
     next_state	<= `state_powerup;
     autorefresh_cntr_l <= `LO;
 	refresh_cntr_l  <= `LO;
-    pwrup       <= `HI;
+    pwrup       <= `HI;				// high indicates we've just power'd up or RESET
     sd_wr_l     <= `HI;
     sd_cs_l     <= `HI;
     sd_ras_l    <= `HI;
@@ -250,7 +253,7 @@ always @(posedge sys_clk or negedge sys_rst_l)
 		refresh_cntr_l <= `HI;		// allow the refresh cycle counter to count
      end
 
-    // PRECHARGE both banks        	
+    // PRECHARGE both (or all) banks        	
     `state_precharge:  begin
         sd_wr_l     <= `LO;
         sd_cs_l     <= `LO;
@@ -258,8 +261,11 @@ always @(posedge sys_clk or negedge sys_rst_l)
     	sd_cas_l    <= `HI;
         sd_dqm      <= 4'hF;
         sd_addx10_mux <= 2'b11;      // A10 = 1'b1   
-        doing_refresh <= `HI;        // indicate that we're doing refresh
-		next_state  <= `state_delay_Trp;
+		next_state  <= `state_idle;
+        if (do_write_ack)
+            do_write_ack<= `LO;         // done acknowledging the write request
+        if (do_read_ack)
+            do_read_ack <= `LO;         // done acknowledging the read request
     end  
 
     // Delay Trp 
@@ -287,10 +293,9 @@ always @(posedge sys_clk or negedge sys_rst_l)
         sd_cs_l     <= `LO;
     	sd_ras_l    <= `LO;
     	sd_cas_l    <= `LO;
-        sd_dqm      <= 4'hF;
         sd_addx10_mux <= 2'b01;      // A10 = 0   
         next_state  <= `state_auto_refresh_dly;
-        autorefresh_cntr_l  <= `HI;  //allow delay cntr to tick
+        autorefresh_cntr_l  <= `HI;  //allow refresh delay cntr (Trc) to tick
         do_refresh_ack <= `HI;      // acknowledge refresh request
      end    
 
@@ -303,60 +308,94 @@ always @(posedge sys_clk or negedge sys_rst_l)
           sd_cs_l     <= `HI;
           sd_ras_l    <= `HI;
           sd_cas_l    <= `HI;
-          sd_dqm      <= 4'hF;
           sd_addx10_mux <= 2'b00;      // select ROW again A10 = A20   
+/*
+		  casex ( {Trc_expired, Ref_expired, pwrup, (do_write|do_read)} )
+          // Trc not expired yet
+          4'b0xxx: begin
+          		next_state <= `state_auto_refresh_dly;
+				do_refresh_ack <= `LO;
+		  end
+		  
+          // Back-back refreshes not done yet
+		  4'b10xx: begin
+                autorefresh_cntr_l <= `LO;  // reset Trc delay counter
+		  		next_state <= `state_auto_refresh;
+		  end
+
+          // This is powerup run, so go and set modereg
+		  4'b110x: begin
+                autorefresh_cntr_l <= `LO;  // reset Trc delay counter
+                   doing_refresh <= `LO;             // refresh cycle is done
+                   refresh_cntr_l  <= `LO;           // ..reset refresh counter
+                next_state <= `state_modeset;
+		  end
+
+          4'b1111: begin	  
+                autorefresh_cntr_l <= `LO;  // reset Trc delay counter
+                   doing_refresh <= `LO;             // refresh cycle is done
+                   refresh_cntr_l  <= `LO;           // ..reset refresh counter
+                next_state <= `state_set_ras; // go service a pending read or write if any
+          end
+
+          4'b1110:	begin	  
+                autorefresh_cntr_l <= `LO;  // reset Trc delay counter
+                   doing_refresh <= `LO;             // refresh cycle is done
+                   refresh_cntr_l  <= `LO;           // ..reset refresh counter
+                next_state <= `state_idle; // go service a pending read or write if any
+	      end
+          endcase
+*/
         // Wait for Trc
         if (autorefresh_cntr == 4'h6) begin  
               autorefresh_cntr_l <= `LO;  // reset Trc delay counter
-              // Check if all refresh is done
-              if ((refresh_cntr == cntr_limit) & (pwrup == `LO))   begin  
+              // Check if the number of specified back-back refreshes are done
+              if (refresh_cntr == cntr_limit)   begin  
                    doing_refresh <= `LO;             // refresh cycle is done
                    refresh_cntr_l  <= `LO;           // ..reset refresh counter
-                   if (do_write | do_read)
-                       next_state <= `state_set_ras; // go service a pending read or write if any
+                   // if this is not a power-up sequence, and there are pending 
+                   // requests, then service it.
+                   if (~pwrup)
+                      if (do_write | do_read)
+                          next_state <= `state_set_ras; // go service a pending read or write if any
+                      else
+                          next_state <= `state_idle;    // if there are no peding RD or WR, then go to idle state
+                   // if this is part of power-up sequencing, we need to go and
+                   // set mode register.
                    else
-                       next_state <= `state_idle;    // if there are no peding RD or WR, then go to idle state
+                      next_state <= `state_modeset;
               end         
-              // IF refresh cycles not done yet..
+              // IF refresh cycles not done yet, keep issuing autorefresh commands
               else
-                   next_state <= `state_precharge; 
+                   next_state <= `state_auto_refresh; 
         end
         // If Trc has not expired
         else begin
               next_state <= `state_auto_refresh_dly;
               do_refresh_ack <= `LO;
         end
+
+
+
     end
 
 
     // MODE SET state
     `state_modeset:  begin
-        next_state  <= `state_delay_Trsc;
+        next_state  <= `state_idle;
         sd_wr_l     <= `LO;
         sd_cs_l     <= `LO;
         sd_ras_l    <= `LO;
         sd_cas_l    <= `LO;
         sd_addx_mux <= 2'b10;
         sd_addx10_mux <= 2'b10;
-    end
-
-    // Delay Trsc
-    // this delay is need to meet the Trsc timing.  This is the mode reg set to
-    // valid command delay.  For most parts this is 20nS.  So at 100MHz, there
-    // needs to be at least 1 NOP cycle.
-    `state_delay_Trsc:  begin
-        sd_wr_l     <= `HI;
-        sd_cs_l     <= `HI;
-        sd_ras_l    <= `HI;
-        sd_cas_l    <= `HI;
         doing_refresh <= `LO;   // deassert 
-        do_modeset_ack <= `HI;  // acknowledge the mode set request
         if (pwrup)
            pwrup    <= `LO;                 // ..no more in power up mode
-        sd_addx_mux <= 2'b00;   // select ROW (A[19:10]) of mp_addx to SDRAM 
-        sd_addx10_mux <= 2'b00; // select ROW (A[20])    "      "
-        next_state  <= `state_idle;
+        if (do_mode_set)
+            do_modeset_ack <= `LO;
     end
+
 
 
     // IDLE state
@@ -365,19 +404,32 @@ always @(posedge sys_clk or negedge sys_rst_l)
         sd_cs_l     <= `HI;
         sd_ras_l	<= `HI;
         sd_cas_l	<= `HI;
-        sd_dqm      <= 4'hF;
         sd_data_ena <= `LO;         // turn off the data bus drivers
         mp_data_mux <= `LO;         // drive the SD data bus with normal data
-        if (do_write | do_read )          
-            next_state <= `state_set_ras;
-         else if (do_mode_set) begin
-            next_state <= `state_modeset;
-            doing_refresh <= `HI;		// techincally we're not doing refresh, but this signal is used to prevent the do_write be deasserted
-        end                             // by the mode_set command.
-        else if (do_refresh) begin
-            next_state <= `state_precharge;
-			refresh_cntr_l <= `HI;		// allow refresh cycle counter to count up
-		end
+        sd_addx_mux <= 2'b00;   // select ROW (A[19:10]) of mp_addx to SDRAM 
+        sd_addx10_mux <= 2'b00; // select ROW (A[20])    "      "
+
+        // if we've just come out of system reset (or powerup)
+        // then we need to go and do initialization sequence.
+        // Or, if a refresh is requested, go and service it.
+        if (do_refresh | pwrup) begin
+           doing_refresh <= `HI;        // indicate that we're doing refresh
+           refresh_cntr_l <= `HI;		// allow refresh cycle counter to count up
+           next_state <= `state_auto_refresh;
+	    end
+
+        // if a single word rad or write request is pending, go and service it
+ 		else if (do_write | do_read )          
+           next_state <= `state_set_ras;
+
+        // if a mode register set is requested, go and service it
+        else if (do_mode_set) begin
+           do_modeset_ack <= `HI;  // acknowledge the mode set request
+           next_state <= `state_modeset;
+           doing_refresh <= `HI;		// techincally we're not doing refresh, but 
+        end                             // this signal is used to prevent the do_write be deasserted
+        								// by the mode_set command.
+
     end    
 
     // SET RAS state
@@ -412,13 +464,32 @@ always @(posedge sys_clk or negedge sys_rst_l)
         sd_cas_l    <= `LO;     // enable the CAS
         sd_wr_l     <= `LO;     // enable the write
         do_write_ack<= `HI;     // acknowledge the write request
-        next_state  <= `state_cool_off;
+        sd_dqm      <= 4'hF;
+        next_state  <= `state_delay_Tras1;
     end
+
+    `state_delay_Tras1:  begin
+        sd_wr_l     <= `HI;
+        sd_cs_l     <= `HI;
+        sd_ras_l	<= `HI;
+        sd_cas_l	<= `HI;
+        sd_dqm      <= 4'hF;
+        sd_addx_mux <= 2'b00;   // send ROW (A[19:10]) of mp_addx to SDRAM 
+        sd_addx10_mux <= 2'b00; // send ROW (A[20])    "      "
+        mp_data_mux <= `HI;         // drive the SD data bus with all zeros
+        next_state  <= `state_delay_Tras2;
+    end
+
+    `state_delay_Tras2:  begin
+        next_state  <= `state_precharge;
+    end
+
 
     // SET CAS state
     `state_set_cas:  begin
         sd_cs_l     <= `LO;
         sd_cas_l    <= `LO;
+        sd_dqm      <= 4'hF;
         next_state  <= `state_cas_latency1;        
     end
 
@@ -426,6 +497,7 @@ always @(posedge sys_clk or negedge sys_rst_l)
         sd_cs_l     <= `HI;     // disable CS
         sd_cas_l    <= `HI;     // disable CAS
         if (modereg_cas_latency==3'b010)  begin
+            do_read_ack    <= `HI;  // acknowledge the read request (do it here due to the latency)
            next_state <= `state_read;            // 2 cycles of lantency done.
            burst_cntr_ena <= `HI;                // enable he burst lenght counter
         end else
@@ -435,34 +507,27 @@ always @(posedge sys_clk or negedge sys_rst_l)
     `state_cas_latency2:  begin
         next_state <= `state_read;
         burst_cntr_ena <= `HI;      // enable the burst lenght counter
+        do_read_ack    <= `HI;  // acknowledge the read request (do it here due to the latency)
     end
 
     `state_read:  begin
         if (burst_length_cntr == modereg_burst_count) begin
             burst_cntr_ena <= `LO;  // done counting;
             sd_rd_ena      <= `LO;     // done with the reading
-            next_state     <= `state_cool_off;
-            do_read_ack    <= `HI;  // acknowledge the read request
-        end else
-           sd_rd_ena  <= `HI;          // enable the read latch on the next state		
-    end
+            next_state     <= `state_precharge;
 
-    `state_cool_off:  begin
         sd_wr_l     <= `HI;
         sd_cs_l     <= `HI;
         sd_ras_l	<= `HI;
         sd_cas_l	<= `HI;
-        sd_dqm      <= 4'hF;
         sd_addx_mux <= 2'b00;   // send ROW (A[19:10]) of mp_addx to SDRAM 
         sd_addx10_mux <= 2'b00; // send ROW (A[20])    "      "
-                mp_data_mux <= `HI;         // drive the SD data bus with all zeros
-        if (do_write)
-            do_write_ack<= `LO;         // done acknowledging the write request
-        if (do_read)
-            do_read_ack <= `LO;         // done acknowledging the read request
-        if (do_mode_set)
-            do_modeset_ack <= `LO;
-        next_state  <= `state_idle;
+        mp_data_mux <= `HI;         // drive the SD data bus with all zeros
+
+        end else begin
+           sd_rd_ena  <= `HI;          // enable the read latch on the next state		
+           next_state     <= `state_read;
+        end
     end
 
   endcase
@@ -479,10 +544,15 @@ always @(posedge sys_clk or negedge autorefresh_cntr_l)
 
 
 // This mux selects the cycle limit value for the 
-// auto refresh counter
+// auto refresh counter.  
+// During power-up sequencing, we need to do `power_up_ref_cntr_limit
+//   number of back=back refreshes.
+// During regular operation, we need to do `auto_ref_cntr_limit number of
+//   back-back refreshes.  This, for most cases is just 1, but if we're doing
+//   "burst" type of refreshes, it could be more than 1.
 always @(pwrup)
   case (pwrup)
-      `HI:      cntr_limit <= `power_up_ref_cntr_limit;
+      `HI:      cntr_limit <= `power_up_ref_cntr_limit;  
       default:  cntr_limit <= `auto_ref_cntr_limit;
   endcase
   
@@ -500,6 +570,9 @@ always @(posedge sys_clk or negedge burst_cntr_ena)
 //
 // REFRESH_CNTR
 //
+// This counter keeps track of the number of back-back refreshes we're
+// doing.  For most cases this would just be 1, but it allows "burst"
+// refresh, where all refrehses are done back to back.
 always @(posedge sys_clk or negedge refresh_cntr_l)
   if (~refresh_cntr_l)
      refresh_cntr <= 13'h0000;
