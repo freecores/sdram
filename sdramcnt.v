@@ -489,13 +489,14 @@ always @(posedge sys_clk or negedge sys_rst_l)
     `state_set_cas:  begin
         sd_cs_l     <= `LO;
         sd_cas_l    <= `LO;
-        sd_dqm      <= 4'hF;
+        sd_dqm      <= 4'h0;
         next_state  <= `state_cas_latency1;        
     end
 
     `state_cas_latency1: begin
         sd_cs_l     <= `HI;     // disable CS
         sd_cas_l    <= `HI;     // disable CAS
+        sd_dqm      <= 4'hF;
         if (modereg_cas_latency==3'b010)  begin
             do_read_ack    <= `HI;  // acknowledge the read request (do it here due to the latency)
            next_state <= `state_read;            // 2 cycles of lantency done.
